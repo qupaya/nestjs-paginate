@@ -62,7 +62,7 @@ export enum PaginationType {
 
 export interface PaginateConfig<T> {
     relations?: FindOptionsRelations<T> | RelationColumn<T>[]
-    sortableColumns: Column<T>[]
+    sortableColumns?: Column<T>[]
     nullSort?: 'first' | 'last'
     searchableColumns?: Column<T>[]
     select?: Column<T>[] | string[]
@@ -87,7 +87,8 @@ export const NO_PAGINATION = 0
 export async function paginate<T extends ObjectLiteral>(
     query: PaginateQuery,
     repo: Repository<T> | SelectQueryBuilder<T>,
-    config: PaginateConfig<T>
+    config: PaginateConfig<T>,
+    customCountQuery?: Repository<T> | SelectQueryBuilder<T>
 ): Promise<Paginated<T>> {
     const page = positiveNumberOrDefault(query.page, 1, 1)
 
@@ -104,7 +105,7 @@ export async function paginate<T extends ObjectLiteral>(
 
     let [items, totalItems]: [T[], number] = [[], 0]
 
-    const queryBuilder = repo instanceof Repository ? repo.createQueryBuilder('__root') : repo
+    const queryBuilder: SelectQueryBuilder<T> = repo instanceof Repository ? repo.createQueryBuilder('__root') : repo
 
     if (repo instanceof Repository && !config.relations && config.loadEagerRelations === true) {
         if (!config.relations) {
@@ -158,33 +159,43 @@ export async function paginate<T extends ObjectLiteral>(
         nullSort = config.nullSort === 'last' ? 'NULLS LAST' : 'NULLS FIRST'
     }
 
-    if (config.sortableColumns.length < 1) {
-        logger.debug("Missing required 'sortableColumns' config.")
-        throw new ServiceUnavailableException()
-    }
+    if (config.sortableColumns) {
+        if (config.sortableColumns.length < 1) {
+            logger.debug("Missing required 'sortableColumns' config.")
+            throw new ServiceUnavailableException()
+        }
 
-    if (query.sortBy) {
-        for (const order of query.sortBy) {
-            if (isEntityKey(config.sortableColumns, order[0]) && ['ASC', 'DESC'].includes(order[1])) {
-                sortBy.push(order as Order<T>)
+        if (query.sortBy) {
+            for (const order of query.sortBy) {
+                if (isEntityKey(config.sortableColumns, order[0]) && ['ASC', 'DESC'].includes(order[1])) {
+                    sortBy.push(order as Order<T>)
+                }
             }
         }
-    }
 
-    if (!sortBy.length) {
-        sortBy.push(...(config.defaultSortBy || [[config.sortableColumns[0], 'ASC']]))
-    }
-
-    for (const order of sortBy) {
-        const columnProperties = getPropertiesByColumnName(order[0])
-        const { isVirtualProperty } = extractVirtualProperty(queryBuilder, columnProperties)
-        const isRelation = checkIsRelation(queryBuilder, columnProperties.propertyPath)
-        const isEmbeded = checkIsEmbedded(queryBuilder, columnProperties.propertyPath)
-        let alias = fixColumnAlias(columnProperties, queryBuilder.alias, isRelation, isVirtualProperty, isEmbeded)
-        if (isVirtualProperty) {
-            alias = `"${alias}"`
+        if (!sortBy.length && config.defaultSortBy) {
+            sortBy.push(...config.defaultSortBy)
         }
-        queryBuilder.addOrderBy(alias, order[1], nullSort)
+        // take my changes
+        if (sortBy.length) {
+            for (const order of sortBy) {
+                const columnProperties = getPropertiesByColumnName(order[0])
+                const { isVirtualProperty } = extractVirtualProperty(queryBuilder, columnProperties)
+                const isRelation = checkIsRelation(queryBuilder, columnProperties.propertyPath)
+                const isEmbeded = checkIsEmbedded(queryBuilder, columnProperties.propertyPath)
+                let alias = fixColumnAlias(
+                    columnProperties,
+                    queryBuilder.alias,
+                    isRelation,
+                    isVirtualProperty,
+                    isEmbeded
+                )
+                if (isVirtualProperty) {
+                    alias = `"${alias}"`
+                }
+                queryBuilder.addOrderBy(alias, order[1], nullSort)
+            }
+        }
     }
 
     // When we partial select the columns (main or relation) we must add the primary key column otherwise
@@ -260,7 +271,17 @@ export async function paginate<T extends ObjectLiteral>(
     }
 
     if (isPaginated) {
-        ;[items, totalItems] = await queryBuilder.getManyAndCount()
+        if (customCountQuery) {
+            const customCountQueryBuilder: SelectQueryBuilder<T> =
+                customCountQuery instanceof Repository
+                    ? customCountQuery.createQueryBuilder('__root')
+                    : customCountQuery
+
+            items = await queryBuilder.getMany()
+            totalItems = await customCountQueryBuilder.getCount()
+        } else {
+            ;[items, totalItems] = await queryBuilder.getManyAndCount()
+        }
     } else {
         items = await queryBuilder.getMany()
     }
