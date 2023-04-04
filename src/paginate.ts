@@ -173,8 +173,8 @@ export async function paginate<T extends ObjectLiteral>(
             }
         }
 
-        if (!sortBy.length) {
-            sortBy.push(...(config.defaultSortBy || [[config.sortableColumns[0], 'ASC']]))
+        if (!sortBy.length && config.defaultSortBy) {
+            sortBy.push(config.defaultSortBy as Order<T>)
         }
     }
 
