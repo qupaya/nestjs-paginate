@@ -43,7 +43,7 @@ export class Paginated<T> {
         sortBy: SortBy<T>
         searchBy: Column<T>[]
         search: string
-        select: string[]
+        select?: string[]
         filter?: { [column: string]: string | string[] }
     }
     links: {
