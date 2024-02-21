@@ -46,7 +46,7 @@ export class Paginated<T> {
         sortBy: SortBy<T>
         searchBy: Column<T>[]
         search: string
-        select: string[]
+        select?: string[]
         filter?: {
             [column: string]: string | string[]
         }
@@ -67,7 +67,7 @@ export enum PaginationType {
 
 export interface PaginateConfig<T> {
     relations?: FindOptionsRelations<T> | RelationColumn<T>[] | FindOptionsRelationByString
-    sortableColumns: Column<T>[]
+    sortableColumns?: Column<T>[]
     nullSort?: 'first' | 'last'
     searchableColumns?: Column<T>[]
     select?: Column<T>[] | string[]
@@ -175,7 +175,8 @@ function flattenWhereAndTransform<T>(
 export async function paginate<T extends ObjectLiteral>(
     query: PaginateQuery,
     repo: Repository<T> | SelectQueryBuilder<T>,
-    config: PaginateConfig<T>
+    config: PaginateConfig<T>,
+    customCountQuery?: Repository<T> | SelectQueryBuilder<T>
 ): Promise<Paginated<T>> {
     const page = positiveNumberOrDefault(query.page, 1, 1)
 
@@ -241,22 +242,24 @@ export async function paginate<T extends ObjectLiteral>(
         nullSort = config.nullSort === 'last' ? 'NULLS LAST' : 'NULLS FIRST'
     }
 
-    if (config.sortableColumns.length < 1) {
-        const message = "Missing required 'sortableColumns' config."
-        logger.debug(message)
-        throw new ServiceUnavailableException(message)
-    }
+    if (config.sortableColumns) {
+        if (config.sortableColumns.length < 1) {
+            const message = "Missing required 'sortableColumns' config."
+            logger.debug(message)
+            throw new ServiceUnavailableException(message)
+        }
 
-    if (query.sortBy) {
-        for (const order of query.sortBy) {
-            if (isEntityKey(config.sortableColumns, order[0]) && ['ASC', 'DESC'].includes(order[1])) {
-                sortBy.push(order as Order<T>)
+        if (query.sortBy) {
+            for (const order of query.sortBy) {
+                if (isEntityKey(config.sortableColumns, order[0]) && ['ASC', 'DESC'].includes(order[1])) {
+                    sortBy.push(order as Order<T>)
+                }
             }
         }
     }
 
-    if (!sortBy.length) {
-        sortBy.push(...(config.defaultSortBy || [[config.sortableColumns[0], 'ASC']]))
+    if (!sortBy.length && config.defaultSortBy) {
+        sortBy.push(...config.defaultSortBy)
     }
 
     for (const order of sortBy) {
@@ -347,7 +350,17 @@ export async function paginate<T extends ObjectLiteral>(
     }
 
     if (isPaginated) {
-        ;[items, totalItems] = await queryBuilder.getManyAndCount()
+        if (customCountQuery) {
+            const customCountQueryBuilder: SelectQueryBuilder<T> =
+                customCountQuery instanceof Repository
+                    ? customCountQuery.createQueryBuilder('__root')
+                    : customCountQuery
+
+            items = await queryBuilder.getMany()
+            totalItems = await customCountQueryBuilder.getCount()
+        } else {
+            ;[items, totalItems] = await queryBuilder.getManyAndCount()
+        }
     } else {
         items = await queryBuilder.getMany()
     }
